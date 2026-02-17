@@ -1,0 +1,120 @@
+# GitHub Actions workflow to build a custom Electron with
+# HEVC + AC-3 + E-AC-3 codec support.
+#
+# Based on 5rahim/electron-media-patch (Electron v36.2.1)
+#
+# NOTE: This build takes 3-6 hours and uses ~80GB disk.
+# GitHub-hosted macOS runners have 14GB RAM + 14GB SSD (insufficient).
+# You need a self-hosted runner with 32GB+ RAM and 100GB+ disk,
+# OR use a Linux runner (ubuntu-latest-xl or large runner).
+
+name: Build Custom Electron (AC3 + HEVC)
+
+on:
+  workflow_dispatch:
+    inputs:
+      electron_version:
+        description: 'Electron version to build'
+        required: true
+        default: 'v36.2.1'
+      target_os:
+        description: 'Target OS'
+        required: true
+        type: choice
+        options:
+          - linux
+          - macos
+
+jobs:
+  build-electron:
+    runs-on: ${{ inputs.target_os == 'macos' && 'macos-14' || 'ubuntu-latest' }}
+    timeout-minutes: 480  # 8 hours max
+
+    steps:
+      - name: Free disk space (Linux)
+        if: inputs.target_os == 'linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache
+          df -h
+
+      - name: Install dependencies (Linux)
+        if: inputs.target_os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang libdbus-1-dev \
+            libgtk-3-dev libnotify-dev libasound2-dev libcap-dev \
+            libcups2-dev libxtst-dev libxss1 libnss3-dev \
+            gcc-multilib g++-multilib curl gperf bison \
+            python3-dbusmock git
+
+      - name: Install Xcode tools (macOS)
+        if: inputs.target_os == 'macos'
+        run: |
+          xcode-select --install 2>/dev/null || true
+
+      - name: Setup depot_tools
+        run: |
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "$PWD/depot_tools" >> $GITHUB_PATH
+
+      - name: Get Electron source
+        run: |
+          mkdir electron && cd electron
+          gclient config --name "src/electron" --unmanaged https://github.com/electron/electron
+          gclient sync --with_branch_heads --with_tags --shallow --no-history
+
+      - name: Checkout Electron ${{ inputs.electron_version }}
+        run: |
+          cd electron/src/electron
+          git fetch origin ${{ inputs.electron_version }}
+          git checkout ${{ inputs.electron_version }} -f
+          cd ../..
+          gclient sync -f
+
+      - name: Download and apply patches
+        run: |
+          git clone https://github.com/5rahim/electron-media-patch.git patches-repo
+
+          # Copy patches
+          cp patches-repo/patches/media_hevc_ac3_chromium.patch electron/src/
+          cp patches-repo/patches/media_hevc_ac3_electron.patch electron/src/electron/
+          cp patches-repo/patches/media_hevc_ac3_ffmpeg.patch electron/src/third_party/ffmpeg/
+
+          # Apply patches
+          cd electron/src && git apply media_hevc_ac3_chromium.patch
+          cd electron && git apply media_hevc_ac3_electron.patch
+          cd ../third_party/ffmpeg && git apply media_hevc_ac3_ffmpeg.patch
+
+          # Download and run HEVC decoder/parser script
+          curl -sL https://raw.githubusercontent.com/StaZhu/enable-chromium-hevc-hardware-decoding/main/add-hevc-ffmpeg-decoder-parser.js -o add-hevc-ffmpeg-decoder-parser.js
+          node ./add-hevc-ffmpeg-decoder-parser.js
+
+      - name: Generate build config
+        run: |
+          cd electron/src
+          export CHROMIUM_BUILDTOOLS_PATH="$(pwd)/buildtools"
+          gn gen out/Release --args='import("//electron/build/args/release.gn")'
+
+      - name: Build Electron
+        run: |
+          cd electron/src
+          export CHROMIUM_BUILDTOOLS_PATH="$(pwd)/buildtools"
+          ninja -C out/Release electron
+
+      - name: Package dist.zip
+        run: |
+          cd electron/src
+          if [ "${{ inputs.target_os }}" = "linux" ]; then
+            electron/script/strip-binaries.py -d out/Release
+          fi
+          ninja -C out/Release electron:electron_dist_zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-${{ inputs.electron_version }}-${{ inputs.target_os }}-${{ runner.arch }}
+          path: electron/src/out/Release/dist.zip
+          retention-days: 30

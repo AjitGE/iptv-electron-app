@@ -1,0 +1,15 @@
+{
+  "name": "iptv-electron-app",
+  "version": "1.0.0",
+  "description": "IPTV Player using Shaka Player in Electron with Dolby codec support and custom User-Agent",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "start:dev": "electron . --dev"
+  },
+  "author": "Ajit Yadav",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^29.1.4"
+  }
+}
