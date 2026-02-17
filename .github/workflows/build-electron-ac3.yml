@@ -69,8 +69,16 @@ jobs:
       - name: Checkout Electron ${{ inputs.electron_version }}
         run: |
           cd electron/src/electron
-          git fetch origin ${{ inputs.electron_version }}
-          git checkout ${{ inputs.electron_version }} -f
+          VERSION="${{ inputs.electron_version }}"
+          git fetch origin --tags
+          if [[ "$VERSION" == *"-x-y" ]]; then
+            # Branch name like 40-x-y
+            git fetch origin "$VERSION"
+            git checkout "origin/$VERSION" -f
+          else
+            # Tag name like v36.2.1
+            git checkout "tags/$VERSION" -f || git checkout "$VERSION" -f || git checkout FETCH_HEAD -f
+          fi
           cd ../..
           gclient sync -f
 
