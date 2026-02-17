@@ -13,7 +13,7 @@
 # ╚══════════════════════════════════════════════════════════════╝
 set -euo pipefail
 
-ELECTRON_VERSION="v36.2.1"
+ELECTRON_VERSION="${ELECTRON_VERSION:-v40.4.1}"
 PATCH_REPO="https://github.com/5rahim/electron-media-patch.git"
 HEVC_SCRIPT_URL="https://raw.githubusercontent.com/StaZhu/enable-chromium-hevc-hardware-decoding/main/add-hevc-ffmpeg-decoder-parser.js"
 BUILD_DIR="${BUILD_DIR:-$HOME/electron-build}"
@@ -23,6 +23,37 @@ echo " Custom Electron Build: HEVC + AC3 + E-AC3"
 echo " Target: Electron $ELECTRON_VERSION"
 echo " Build dir: $BUILD_DIR"
 echo "═══════════════════════════════════════════════════════════"
+
+# ─── Preflight checks ────────────────────────────────────────
+echo ""
+echo "▸ Preflight: Checking host requirements..."
+if ! command -v git >/dev/null; then
+    echo "Error: git is not installed."
+    exit 1
+fi
+if ! command -v python3 >/dev/null; then
+    echo "Error: python3 is not installed."
+    exit 1
+fi
+if ! command -v node >/dev/null; then
+    echo "Error: node is not installed (need Node 20+)."
+    exit 1
+fi
+
+if [ "$(uname)" = "Darwin" ]; then
+    if ! xcode-select -p >/dev/null 2>&1; then
+        echo "Error: Xcode Command Line Tools not installed."
+        echo "Run: xcode-select --install"
+        exit 1
+    fi
+fi
+
+# Check free disk (warn if under 100GB)
+FREE_KB=$(df -k "$BUILD_DIR" | tail -1 | awk '{print $4}')
+FREE_GB=$((FREE_KB / 1024 / 1024))
+if [ "$FREE_GB" -lt 100 ]; then
+    echo "Warning: Only ${FREE_GB}GB free. Build may fail (<100GB)."
+fi
 
 # ─── Step 1: Install depot_tools ──────────────────────────────
 echo ""
@@ -54,8 +85,13 @@ echo ""
 echo "▸ Step 3/8: Checking out Electron $ELECTRON_VERSION..."
 cd "$BUILD_DIR/electron/src/electron"
 git remote set-url origin https://github.com/electron/electron || true
-git fetch origin
-git checkout "$ELECTRON_VERSION" -f
+git fetch origin --tags
+if [[ "$ELECTRON_VERSION" == *"-x-y" ]]; then
+    git fetch origin "$ELECTRON_VERSION"
+    git checkout "origin/$ELECTRON_VERSION" -f
+else
+    git checkout "tags/$ELECTRON_VERSION" -f || git checkout "$ELECTRON_VERSION" -f
+fi
 cd "$BUILD_DIR/electron"
 gclient sync -f
 
